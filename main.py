@@ -1,5 +1,6 @@
 import numpy as np
 import pulp
+import time
 
 def generate_instance(num_supply_node, num_demand_node, max_cost, max_amount):
     """"
@@ -46,7 +47,7 @@ def generate_instance(num_supply_node, num_demand_node, max_cost, max_amount):
     return supply, demand, cost_matrix
 
 
-def solver(supply, demand, cost_matrix):
+def solver(supply, demand, cost_matrix, verbose=False):
     '''
     Function that takes a transportation problem instance as input, formulates an LP model and solves it
 
@@ -55,6 +56,7 @@ def solver(supply, demand, cost_matrix):
     supply : array storing max amount of goods each supply node can provide
     demand : array storing max amount of goods each demand node can request
     cost_matrix : matrix storing the cost of supplying a good from a supply node to a demand node
+    verbose : if True, show decision variable values
     '''
 
     # Create lists of all supply and demand nodes
@@ -108,17 +110,18 @@ def solver(supply, demand, cost_matrix):
         )
 
     prob.writeLP("transportation_problem.lp")
-    prob.solve()
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
 
     # Print results
-    print("Status:", pulp.LpStatus[prob.status])
+    if verbose:
+        print("Status:", pulp.LpStatus[prob.status])
 
-    # Print each decision variable's optimum value
-    for v in prob.variables():
-        print(v.name, "=", v.varValue)
+        # Print each decision variable's optimum value
+        for v in prob.variables():
+            print(v.name, "=", v.varValue)
 
-    # Print minimized objective function value
-    print("Total Transportation Cost = ", pulp.value(prob.objective))
+    # Return minimized objective function value
+    return pulp.value(prob.objective)
 
 
 def _revised_simplex_helper(A, b, c, c_original=[]):
@@ -156,19 +159,18 @@ def _revised_simplex_helper(A, b, c, c_original=[]):
 
     # Start iterations
     while True:
+        N = A[:, x_non_basic]
+        B = A[:, x_basic]
+        B_inverse = np.linalg.inv(B)
+        current_b = B_inverse @ b
+
         # Check for infeasibility
-        if not np.all(b > -10**(-10)):  # If a value in RHS is negative
+        if not np.all(current_b > -10**(-10)):  # If a value in RHS is negative
             print('Infeasible')
             return
         
         # Check for optimality
-        N = A[:, x_non_basic]
-        B = A[:, x_basic]
-        B_inverse = np.linalg.inv(B)
-
         tmp = c_basic @ B_inverse @ N - c_non_basic
-
-        current_b = B_inverse @ b
         if np.all(tmp >= -10**(-10)):
             optimal_value = 0
             if len(c_original) == 0:  # Big-M is not used
@@ -187,7 +189,7 @@ def _revised_simplex_helper(A, b, c, c_original=[]):
         
         # Not optimal yet, find entering variable
         entering_var = np.argmin(tmp)
-        pivot_col = N[:, entering_var]
+        pivot_col = B_inverse @ N[:, entering_var]
 
         # Check for unboundedness
         if np.all(pivot_col <= 10**(-10)):
@@ -225,7 +227,7 @@ def _revised_simplex_helper(A, b, c, c_original=[]):
             c_non_basic_original[entering_var] = tmp_var_coefficient_original
 
 
-def revised_simplex(A, b, c, c_original=[]):
+def revised_simplex(A, b, c, c_original=[], verbose=False):
     '''
     Function that takes any maximization linear programming instance as an input and solves it using the Revised Simplex Algorithm
 
@@ -243,15 +245,16 @@ def revised_simplex(A, b, c, c_original=[]):
         return result
     else:
         if result:  # Result is not empty, optimal solutions have been found
-            print(f"Optimal solution found!")
-            dec_vars = result[:-1]
-            dec_vars.sort(key=lambda x: x[0])
-            for dec_var in dec_vars:
-                    print(f"x_{dec_var[0]} = {dec_var[1]:.2f}")
+            if verbose:
+                print(f"Optimal solution found!")
+                dec_vars = result[:-1]
+                dec_vars.sort(key=lambda x: x[0])
+                for dec_var in dec_vars:
+                        print(f"x_{dec_var[0]} = {dec_var[1]:.2f}")
             print(f'Objective function value: {result[-1]}')
 
 
-def big_m(supply, demand, cost_matrix):
+def big_m(supply, demand, cost_matrix, verbose=False):
     '''
     Function that reformats the given 'supply, demand, cost_matrix' arrays to create A, b, c arrays and solves the given LP using Big-M method by 
     first bringing simplex tableau into canonical form and then calling the revised_simplex function
@@ -297,31 +300,44 @@ def big_m(supply, demand, cost_matrix):
                     print("Infeasible!")
                     return
 
-        print(f"Optimal solution found!")
-        for i in solution:
-            print(i)
-        print(f'Objective function value: {result[-1]}')
+        if verbose:
+            print(f"Optimal solution found!")
+            for i in solution:
+                print(i)
+        
+        # Return Objective function value
+        return result[-1]
+
+
+def experiments(num_node, max_cost, max_amount, verbose=False):
+    '''
+    Function for testing the same LP with Pulp's solver and our custom revised simplex solver
+    '''
+    supply, demand, cost_matrix = generate_instance(num_node, num_node, max_cost, max_amount)
+    
+    # Pulp solver
+    start = time.time()
+    pulp_value = solver(supply, demand, cost_matrix, verbose)
+
+    print(f'node num: {num_node}\n')
+
+    # Print minimized objective function value
+    print("Total Transportation Cost(Pulp Solver) = ", pulp_value)
+    print(f"Solver time: {time.time() - start}\n")
+    
+    # Our solver
+    start2 = time.time()
+    our_value = big_m(supply, demand, cost_matrix, verbose)
+    print("Total Transportation Cost(Our Solver) = ", our_value)
+    print(f"Our revised simplex time: {time.time() - start2}")
+    print('\n-----------------------------------------\n')
     
 
 if __name__ == "__main__":
-    # Generate a transportation problem
-    supply, demand, cost_matrix = generate_instance(3, 2, 10, 10)
+    # Run multiple experiments and observe results and times spent
+    node_nums = [i for i in range(5, 100, 10)]
+    max_cost = 20
+    max_amount = 10
 
-    # Use PuLP solver
-    print("Solver's answer:")
-    solver(supply, demand, cost_matrix)
-
-    print('\n-----------------------------\n')
-
-    # Use our solver
-    print("Our answer:")
-    big_m(supply, demand, cost_matrix)
-
-    print('\n-----------------------------\n')
-    print('Solving a random LP')
-
-    # Solve a random LP apart from transportation problem
-    A = np.array([[1,0,1,0,0],[0,2,0,1,0],[3,2,0,0,1]])
-    b = np.array([4,12,18])
-    c = np.array([3,5, 0, 0, 0])
-    revised_simplex(A,b,c)
+    for node_num in node_nums:
+        experiments(node_num, max_cost, max_amount, False)
